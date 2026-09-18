@@ -1,0 +1,47 @@
+// Gradle init script for unofficial DEBUG builds of Öffi NG.
+//
+// The `oeffi_ng` signingConfig in androidstudio/oeffi-studio/build.gradle
+// hard-codes santawho's secret release keystore. This init script redirects it
+// to a throwaway keystore (path + password from the environment) so a debug APK
+// can be built without the release secret. It also normalizes the applicationId
+// that the build derives from the current git branch name — feature branches
+// become an "edition" suffix that can contain characters (e.g. '/', '-') which
+// are illegal in an Android package name and would fail resource linking.
+//
+// Applied only when passed via --init-script; a plain `gradlew` build is
+// unaffected. Real releases keep using oeffi-ng.jks + OEFFI_NG_JKS_PASSWORD.
+
+def keystore = System.getenv('OEFFI_NG_DEBUG_KEYSTORE')
+def keystorePassword = System.getenv('OEFFI_NG_JKS_PASSWORD')
+
+gradle.allprojects { project ->
+    project.afterEvaluate {
+        def android = project.extensions.findByName('android')
+        if (android == null) return
+
+        // Redirect release signing config to the throwaway debug keystore.
+        if (keystore) {
+            def sc = android.signingConfigs.findByName('oeffi_ng')
+            if (sc != null) {
+                sc.storeFile = new File(keystore)
+                sc.storePassword = keystorePassword
+                sc.keyAlias = 'apk'
+                sc.keyPassword = keystorePassword
+                println "[oeffi-ng debug] signing redirected to ${keystore}"
+            }
+        }
+
+        // Normalize a branch-derived applicationId into a valid package name.
+        def ng = android.productFlavors?.findByName('ng')
+        if (ng?.applicationId) {
+            def valid = ng.applicationId ==~ /[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+/
+            if (!valid) {
+                def sanitized = ng.applicationId
+                        .replaceAll(/[^A-Za-z0-9_.]/, '_')   // illegal chars -> _
+                        .replaceAll(/\.(?=[0-9])/, '._')     // segment can't start with a digit
+                println "[oeffi-ng debug] applicationId '${ng.applicationId}' -> '${sanitized}'"
+                ng.applicationId = sanitized
+            }
+        }
+    }
+}
