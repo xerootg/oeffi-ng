@@ -1,0 +1,100 @@
+name: Build debug APK
+
+# Builds an unofficial, debug-signed Öffi NG APK from the androidstudio/ project
+# and publishes it as a downloadable Release asset (a direct link you can open on
+# a phone, and that Obtainium can track). Does not need santawho's release keystore
+# or a fork of public-transport-enabler: the MOTIS fixes ride as patches under
+# .claude/patches/ and are applied to the submodule at build time.
+
+on:
+  push:
+    branches:
+      - claude/offi-ng-build-setup-p71qls
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to publish the Release asset
+
+concurrency:
+  group: debug-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Init public-transport-enabler submodule
+        run: git submodule update --init --depth 1 public-transport-enabler
+
+      - name: Apply not-yet-upstreamed PTE fixes
+        run: |
+          shopt -s nullglob
+          for p in .claude/patches/*.patch; do
+            echo "applying $p"
+            git -C public-transport-enabler apply "${GITHUB_WORKSPACE}/${p}"
+          done
+
+      - name: Use clean edition for the debug build
+        # The build derives its applicationId/label from the branch name; a feature
+        # branch becomes an ugly "edition". Build as if on nextgen so the APK is a
+        # clean de.santawho.oeffi_ng.debug / "Öffi NG Debug". Local only.
+        run: git checkout -B nextgen
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" \
+            "platforms;android-36" "platforms;android-37.0" \
+            "build-tools;36.1.0" "build-tools;37.0.0"
+
+      - name: Generate throwaway debug keystore
+        run: |
+          keytool -genkeypair -keystore "${RUNNER_TEMP}/oeffi-debug.jks" -storetype JKS -alias apk \
+            -storepass ci-debug -keypass ci-debug -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Oeffi NG CI Debug, O=oeffi-ng, C=DE" -noprompt
+
+      - name: Build debug APK
+        working-directory: androidstudio
+        env:
+          OEFFI_NG_JKS_PASSWORD: ci-debug
+          OEFFI_NG_DEBUG_KEYSTORE: ${{ runner.temp }}/oeffi-debug.jks
+        run: |
+          ./gradlew --no-daemon :oeffi-studio:assembleNgDebug \
+            --init-script "${GITHUB_WORKSPACE}/.claude/oeffi-debug-signing.init.gradle"
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp androidstudio/oeffi-studio/build/outputs/apk/ng/debug/*.apk dist/oeffi-ng-debug.apk
+          sha256sum dist/oeffi-ng-debug.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oeffi-ng-debug-apk
+          path: dist/oeffi-ng-debug.apk
+          if-no-files-found: error
+
+      - name: Publish rolling pre-release (debug-latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete debug-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create debug-latest dist/oeffi-ng-debug.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Debug build (latest)" \
+            --notes "Automated debug build of \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`. Debug-signed with an ephemeral key — sideload to test. Includes the MOTIS ghost-bus and free-text-address fixes."

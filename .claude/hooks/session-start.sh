@@ -60,6 +60,23 @@ ${SUDO} "$SDKMGR" --sdk_root="${ANDROID_HOME}" \
 log "initializing public-transport-enabler submodule"
 git -C "$PROJECT_DIR" submodule update --init --depth 1 public-transport-enabler
 
+# --- 3b. Apply not-yet-upstreamed public-transport-enabler fixes -------------
+# These ride as patches until they land upstream (santawho/public-transport-enabler).
+# Idempotent: skip if already applied, warn (don't fail) if a patch no longer applies.
+if [ -d "${PROJECT_DIR}/.claude/patches" ]; then
+  for patch in "${PROJECT_DIR}"/.claude/patches/*.patch; do
+    [ -e "$patch" ] || continue
+    if git -C "${PROJECT_DIR}/public-transport-enabler" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      log "PTE patch already applied: $(basename "$patch")"
+    elif git -C "${PROJECT_DIR}/public-transport-enabler" apply --check "$patch" >/dev/null 2>&1; then
+      git -C "${PROJECT_DIR}/public-transport-enabler" apply "$patch"
+      log "applied PTE patch: $(basename "$patch")"
+    else
+      log "WARNING: PTE patch no longer applies, skipping: $(basename "$patch")"
+    fi
+  done
+fi
+
 # --- 4. SDK location for the Gradle build ------------------------------------
 printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "${PROJECT_DIR}/androidstudio/local.properties"
 

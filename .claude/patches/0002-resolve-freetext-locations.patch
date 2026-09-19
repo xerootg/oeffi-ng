@@ -1,0 +1,158 @@
+From 5b1fa61654172a035e7469e226d7c671562401eb Mon Sep 17 00:00:00 2001
+From: xerootg <4009802+xerootg@users.noreply.github.com>
+Date: Sat, 19 Sep 2026 05:16:02 +0000
+Subject: [PATCH] Resolve free-text trip locations instead of crashing on them
+
+queryTrips threw IllegalArgumentException when from/via/to was neither a
+station nor had coordinates -- e.g. a pasted address like
+"600 N 34th St, Seattle, WA 98103". The app's background "query more trips"
+path wraps any RuntimeException into an uncaught one, so such a location
+crashed the app in a restart loop.
+
+Resolve free-text locations via the geocoder instead, mirroring the
+identified / ambiguous / not-identified handling of the EFA and HAFAS
+providers: a unique match is used directly, several matches are returned as
+AMBIGUOUS for the app to disambiguate, and no match yields UNKNOWN_FROM /
+UNKNOWN_TO. Never throw.
+
+Because the MOTIS geocoder mis-parses abbreviated US street components
+("600 N 34th St" fails; "600 North 34th Street" resolves), expand common
+directional and trailing street-type abbreviations before geocoding so a
+pasted address resolves. ZIP codes are left as-is.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019sykwtY5YrpFK3EH7EmDy8
+---
+ .../provider/motis/AbstractMotisProvider.java | 100 +++++++++++++++---
+ 1 file changed, 88 insertions(+), 12 deletions(-)
+
+diff --git a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
+index a67b397..0d94c7e 100644
+--- a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
++++ b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
+@@ -724,6 +724,46 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+         return new MotisTripRef(network, unpacker);
+     }
+ 
++    /** Upper bound on geocoding candidates offered when a free-text location is ambiguous. */
++    private static final int MAX_AMBIGUOUS_LOCATIONS = 12;
++
++    /** Whether a location can be sent to the routing endpoint as-is (a stop id, or coordinates). */
++    private static boolean isDirectlyRoutable(final Location location) {
++        return (location.type == LocationType.STATION && location.hasId()) || location.hasCoord();
++    }
++
++    /**
++     * Expand common US street abbreviations so a pasted address such as
++     * "600 N 34th St, Seattle, WA 98103" resolves against the photon-style geocoder MOTIS
++     * uses, which mis-handles the abbreviated form (the expanded "600 North 34th Street,
++     * Seattle, WA 98103" resolves correctly). Directionals are always expanded; street types
++     * only as a trailing token (before a comma or end of string), so "St Louis" and
++     * "Ave Maria" are left untouched. ZIP codes are harmless and kept. Applied only when
++     * resolving a free-text trip location, not during interactive autocomplete.
++     */
++    protected String normalizeFreeTextLocation(final String text) {
++        String s = text;
++        s = s.replaceAll("(?i)\\bNE\\b", "Northeast");
++        s = s.replaceAll("(?i)\\bNW\\b", "Northwest");
++        s = s.replaceAll("(?i)\\bSE\\b", "Southeast");
++        s = s.replaceAll("(?i)\\bSW\\b", "Southwest");
++        s = s.replaceAll("(?i)\\bN\\b", "North");
++        s = s.replaceAll("(?i)\\bS\\b", "South");
++        s = s.replaceAll("(?i)\\bE\\b", "East");
++        s = s.replaceAll("(?i)\\bW\\b", "West");
++        s = s.replaceAll("(?i)\\bSt\\b(?=\\s*(,|$))", "Street");
++        s = s.replaceAll("(?i)\\bAve\\b(?=\\s*(,|$))", "Avenue");
++        s = s.replaceAll("(?i)\\bBlvd\\b(?=\\s*(,|$))", "Boulevard");
++        s = s.replaceAll("(?i)\\bRd\\b(?=\\s*(,|$))", "Road");
++        s = s.replaceAll("(?i)\\bDr\\b(?=\\s*(,|$))", "Drive");
++        s = s.replaceAll("(?i)\\bLn\\b(?=\\s*(,|$))", "Lane");
++        s = s.replaceAll("(?i)\\bCt\\b(?=\\s*(,|$))", "Court");
++        s = s.replaceAll("(?i)\\bPl\\b(?=\\s*(,|$))", "Place");
++        s = s.replaceAll("(?i)\\bHwy\\b(?=\\s*(,|$))", "Highway");
++        s = s.replaceAll("(?i)\\bPkwy\\b(?=\\s*(,|$))", "Parkway");
++        return s;
++    }
++
+     @Override
+     public QueryTripsResult queryTrips(
+             final Location from,
+@@ -742,27 +782,63 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+         // TODO: Uncomment when support for fares is added in parseMotisItinerary
+         // endpointBuilder.addQueryParameter("withFares", "true");
+ 
+-        if (from.type == LocationType.STATION) {
+-            endpointBuilder.addQueryParameter("fromPlace", from.id);
+-        } else if (from.coord != null) {
+-            endpointBuilder.addQueryParameter("fromPlace", String.format(Locale.US, "%f,%f", from.coord.getLatAsDouble(), from.coord.getLonAsDouble()));
++        // A free-text location (e.g. a pasted address like "600 N 34th St, Seattle, WA
++        // 98103") arrives with neither a stop id nor coordinates. Resolve it via the
++        // geocoder so it can actually be routed to, instead of failing. This mirrors the
++        // identified / ambiguous / not-identified handling of the EFA and HAFAS providers:
++        //   - exactly one match  -> use it directly,
++        //   - several matches    -> return AMBIGUOUS so the app can offer a picker,
++        //   - no match           -> return UNKNOWN_FROM / UNKNOWN_TO.
++        Location resolvedFrom = from;
++        Location resolvedTo = to;
++        List<Location> ambiguousFrom = null, ambiguousTo = null;
++
++        if (!isDirectlyRoutable(from)) {
++            final List<Location> candidates = from.hasName()
++                    ? suggestLocations(normalizeFreeTextLocation(from.name), null, MAX_AMBIGUOUS_LOCATIONS).getLocations()
++                    : Collections.<Location>emptyList();
++            if (candidates.isEmpty())
++                return new QueryTripsResult(new ResultHeader(network, "MOTIS"), QueryTripsResult.Status.UNKNOWN_FROM);
++            else if (candidates.size() == 1)
++                resolvedFrom = candidates.get(0);
++            else
++                ambiguousFrom = candidates;
++        }
++        if (!isDirectlyRoutable(to)) {
++            final List<Location> candidates = to.hasName()
++                    ? suggestLocations(normalizeFreeTextLocation(to.name), null, MAX_AMBIGUOUS_LOCATIONS).getLocations()
++                    : Collections.<Location>emptyList();
++            if (candidates.isEmpty())
++                return new QueryTripsResult(new ResultHeader(network, "MOTIS"), QueryTripsResult.Status.UNKNOWN_TO);
++            else if (candidates.size() == 1)
++                resolvedTo = candidates.get(0);
++            else
++                ambiguousTo = candidates;
++        }
++        if (ambiguousFrom != null || ambiguousTo != null)
++            return new QueryTripsResult(new ResultHeader(network, "MOTIS"), ambiguousFrom, null, ambiguousTo);
++
++        if (resolvedFrom.type == LocationType.STATION && resolvedFrom.hasId()) {
++            endpointBuilder.addQueryParameter("fromPlace", resolvedFrom.id);
++        } else if (resolvedFrom.hasCoord()) {
++            endpointBuilder.addQueryParameter("fromPlace", String.format(Locale.US, "%f,%f", resolvedFrom.getLatAsDouble(), resolvedFrom.getLonAsDouble()));
+         } else {
+-            throw new IllegalArgumentException("from needs to be stop or have coordinates: " + to);
++            return new QueryTripsResult(new ResultHeader(network, "MOTIS"), QueryTripsResult.Status.UNKNOWN_FROM);
+         }
+ 
+         if (via != null) {
+-            if (via.type != LocationType.STATION) {
+-                throw new IllegalArgumentException("via only a stop: " + via);
++            if (via.type != LocationType.STATION || !via.hasId()) {
++                return new QueryTripsResult(new ResultHeader(network, "MOTIS"), QueryTripsResult.Status.UNKNOWN_VIA);
+             }
+             endpointBuilder.addQueryParameter("via", via.id);
+         }
+ 
+-        if (to.type == LocationType.STATION) {
+-            endpointBuilder.addQueryParameter("toPlace", to.id);
+-        } else if (to.coord != null) {
+-            endpointBuilder.addQueryParameter("toPlace", String.format(Locale.US, "%f,%f", to.coord.getLatAsDouble(), to.coord.getLonAsDouble()));
++        if (resolvedTo.type == LocationType.STATION && resolvedTo.hasId()) {
++            endpointBuilder.addQueryParameter("toPlace", resolvedTo.id);
++        } else if (resolvedTo.hasCoord()) {
++            endpointBuilder.addQueryParameter("toPlace", String.format(Locale.US, "%f,%f", resolvedTo.getLatAsDouble(), resolvedTo.getLonAsDouble()));
+         } else {
+-            throw new IllegalArgumentException("to needs to be stop or have coordinates: " + to);
++            return new QueryTripsResult(new ResultHeader(network, "MOTIS"), QueryTripsResult.Status.UNKNOWN_TO);
+         }
+ 
+         endpointBuilder.addQueryParameter("time", DateTimeFormatter.ISO_DATE_TIME.format(date.toInstant().atZone(ZoneId.of("UTC"))));
+-- 
+2.43.0
+

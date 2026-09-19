@@ -53,6 +53,37 @@ branch: any branch other than `main` / `master` / `nextgen` becomes an
 `build-debug.sh`'s init script normalizes this automatically. To build the exact
 release identity, build from `nextgen`.
 
+## Carried MOTIS fixes (`.claude/patches/`)
+
+Two fixes to `public-transport-enabler`'s MOTIS provider are not yet upstream, so
+they ride as patches applied to the submodule at build time:
+
+- `0001-ghost-bus-realtime.patch` — only show a real-time departure countdown when
+  MOTIS actually has real-time data (otherwise it's shown as scheduled).
+- `0002-resolve-freetext-locations.patch` — resolve a pasted free-text address
+  (e.g. `600 N 34th St, Seattle, WA 98103`) via the geocoder instead of crashing;
+  expands US street abbreviations so the address actually resolves.
+
+The SessionStart hook and the CI workflow apply them idempotently. To apply by hand:
+
+```bash
+git submodule update --init public-transport-enabler
+for p in .claude/patches/*.patch; do git -C public-transport-enabler apply "$PWD/$p"; done
+```
+
+## Continuous integration
+
+`.github/workflows/build-debug-apk.yml` builds a debug-signed APK on every push to
+this branch (and via **Run workflow**) and publishes it two ways:
+
+- as a workflow **artifact** (`oeffi-ng-debug-apk`), and
+- as a rolling pre-**release** tagged `debug-latest`, so the APK has a stable direct
+  download URL — installable from a phone browser and trackable by Obtainium:
+  `https://github.com/xerootg/oeffi-ng/releases/download/debug-latest/oeffi-ng-debug.apk`
+
+It needs no secrets: it applies the patches above and signs with an ephemeral key.
+Enable **Actions** on the fork (Actions tab) for it to run.
+
 ## Official release build
 
 Real releases are produced by `androidstudio/` with the release keystore and a

@@ -1,0 +1,52 @@
+From 379eb58fd1fde73669a0601adabf336c5d05587e Mon Sep 17 00:00:00 2001
+From: xerootg <4009802+xerootg@users.noreply.github.com>
+Date: Sat, 19 Sep 2026 00:22:53 +0000
+Subject: [PATCH] Only surface real-time departures when MOTIS has real-time
+ data
+
+queryStationBoard always populated the Departure's predicted time from the
+MOTIS "departure"/"arrival" field, even when a stop time has no real-time
+data. In that case MOTIS echoes the scheduled time into that field, so the
+UI rendered a live countdown for a departure with no prediction behind it --
+a "ghost" departure that counts down to zero and never arrives.
+
+Gate the predicted time (and predicted track) on the stop time's "realTime"
+flag, matching how the trip/leg parser and parseMotisStop already behave.
+When there is no real-time data the departure is surfaced as scheduled-only.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019sykwtY5YrpFK3EH7EmDy8
+---
+ .../pte/provider/motis/AbstractMotisProvider.java     | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
+index efbca33..a67b397 100644
+--- a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
++++ b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
+@@ -642,13 +642,20 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+                     final Destination destination = new Destination(parseMotisPlace(stopTime.getJSONObject(tripX)));
+ 
+                     final TimeZone timeZone = getMotisTimeZone(place);
++                    // Only treat the estimated time as a real-time prediction when MOTIS
++                    // actually has real-time data for this stop time. Otherwise MOTIS echoes
++                    // the scheduled time into the estimated field, and the UI would render a
++                    // live countdown for a departure that has no prediction behind it -- the
++                    // classic "ghost" departure that counts down to zero and never arrives.
++                    final boolean realtime = stopTime.has("realTime") && stopTime.getBoolean("realTime");
+                     sd.departures.add(new Departure(
+                             arrivals,
+                             parseMotisDateTime(place.getString(scheduledX), timeZone),
+-                            parseMotisDateTime(place.getString(estimatedX), timeZone),
++                            realtime && place.has(estimatedX)
++                                    ? parseMotisDateTime(place.getString(estimatedX), timeZone) : null,
+                             line,
+                             place.has("scheduledTrack") ? new Position(place.getString("scheduledTrack")) : null,
+-                            place.has("track") ? new Position(place.getString("track")) : null,
++                            realtime && place.has("track") ? new Position(place.getString("track")) : null,
+                             destination,
+                             stopTime.has("cancelled") && stopTime.getBoolean("cancelled"),
+                             null,
+-- 
+2.43.0
+
