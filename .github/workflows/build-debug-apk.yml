@@ -51,6 +51,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Default installs the obsolete "tools" package, which no longer exists in the
+          # SDK repository and makes the action fail. Install nothing here; the next step
+          # installs exactly what the build needs.
+          packages: ''
 
       - name: Install SDK packages
         run: |
