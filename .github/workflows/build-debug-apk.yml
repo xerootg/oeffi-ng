@@ -76,7 +76,8 @@ jobs:
           OEFFI_NG_JKS_PASSWORD: ci-debug
           OEFFI_NG_DEBUG_KEYSTORE: ${{ runner.temp }}/oeffi-debug.jks
         run: |
-          ./gradlew --no-daemon :oeffi-studio:assembleNgDebug \
+          # gradlew is committed non-executable upstream; invoke via sh (exec-bit independent).
+          sh ./gradlew --no-daemon :oeffi-studio:assembleNgDebug \
             --init-script "${GITHUB_WORKSPACE}/.claude/oeffi-debug-signing.init.gradle"
 
       - name: Stage APK
