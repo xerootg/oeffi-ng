@@ -1,4 +1,4 @@
-From 5b1fa61654172a035e7469e226d7c671562401eb Mon Sep 17 00:00:00 2001
+From 8e28f03cc92fec5e4073556306a3a2d0346e5c6e Mon Sep 17 00:00:00 2001
 From: xerootg <4009802+xerootg@users.noreply.github.com>
 Date: Sat, 19 Sep 2026 05:16:02 +0000
 Subject: [PATCH] Resolve free-text trip locations instead of crashing on them
@@ -17,20 +17,35 @@ UNKNOWN_TO. Never throw.
 
 Because the MOTIS geocoder mis-parses abbreviated US street components
 ("600 N 34th St" fails; "600 North 34th Street" resolves), expand common
-directional and trailing street-type abbreviations before geocoding so a
-pasted address resolves. ZIP codes are left as-is.
+directional and trailing street-type abbreviations before geocoding. This
+normalization is applied in suggestLocations too, so interactive autocomplete
+(the "to"/"from" fields) resolves a pasted address such as
+"7681 S 180th St, Kent, WA 98032" instead of returning unrelated places.
+ZIP codes are left as-is.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_019sykwtY5YrpFK3EH7EmDy8
 ---
- .../provider/motis/AbstractMotisProvider.java | 100 +++++++++++++++---
- 1 file changed, 88 insertions(+), 12 deletions(-)
+ .../provider/motis/AbstractMotisProvider.java | 105 +++++++++++++++---
+ 1 file changed, 92 insertions(+), 13 deletions(-)
 
 diff --git a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
-index a67b397..0d94c7e 100644
+index a67b397..84fbb29 100644
 --- a/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
 +++ b/src/de/schildbach/pte/provider/motis/AbstractMotisProvider.java
-@@ -724,6 +724,46 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+@@ -690,7 +690,10 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+                 .addPathSegment("api")
+                 .addPathSegment("v1")
+                 .addPathSegment("geocode")
+-                .addQueryParameter("text", constraint.toString());
++                // Normalize abbreviated US street components so autocomplete resolves a
++                // pasted address (e.g. "7681 S 180th St, Kent, WA 98032"); without this the
++                // geocoder mis-parses the abbreviations and returns unrelated places.
++                .addQueryParameter("text", normalizeFreeTextLocation(constraint.toString()));
+         if (maxLocations > 0) {
+             endpointBuilder.addQueryParameter("numResults", String.valueOf(
+                     Math.min(maxLocations, getSuggestedLocationsServerLimit())));
+@@ -724,6 +727,46 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
          return new MotisTripRef(network, unpacker);
      }
  
@@ -77,7 +92,7 @@ index a67b397..0d94c7e 100644
      @Override
      public QueryTripsResult queryTrips(
              final Location from,
-@@ -742,27 +782,63 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
+@@ -742,27 +785,63 @@ public class AbstractMotisProvider extends AbstractNetworkProvider {
          // TODO: Uncomment when support for fares is added in parseMotisItinerary
          // endpointBuilder.addQueryParameter("withFares", "true");
  
