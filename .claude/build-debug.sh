@@ -9,7 +9,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
-DEBUG_KEYSTORE="${OEFFI_NG_DEBUG_KEYSTORE:-${ANDROID_HOME}/oeffi-ng-debug.jks}"
+DEBUG_KEYSTORE="${OEFFI_NG_DEBUG_KEYSTORE:-${REPO_ROOT}/.claude/oeffi-ng-debug.jks}"
 
 export ANDROID_HOME
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"

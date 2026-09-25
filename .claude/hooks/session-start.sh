@@ -17,7 +17,7 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 CMDLINE_TOOLS_ZIP="commandlinetools-linux-15859902_latest.zip"
 CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
-DEBUG_KEYSTORE="${ANDROID_HOME}/oeffi-ng-debug.jks"
+DEBUG_KEYSTORE="${PROJECT_DIR}/.claude/oeffi-ng-debug.jks"
 DEBUG_KEYSTORE_PASSWORD="oeffi-ng-debug"
 
 SUDO=""
@@ -80,12 +80,15 @@ fi
 # --- 4. SDK location for the Gradle build ------------------------------------
 printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "${PROJECT_DIR}/androidstudio/local.properties"
 
-# --- 5. Throwaway debug keystore ---------------------------------------------
-# The build's signingConfig hard-codes the (secret) release keystore. For local
-# debug builds we generate a throwaway key; real releases still use the
-# committed oeffi-ng.jks + OEFFI_NG_JKS_PASSWORD from the CI secret.
+# --- 5. Stable debug keystore ------------------------------------------------
+# Debug builds are signed with the committed, stable throwaway key
+# (.claude/oeffi-ng-debug.jks) so a new build installs over the previous one
+# (no uninstall) and Obtainium can auto-update. Real releases still use the
+# committed oeffi-ng.jks + OEFFI_NG_JKS_PASSWORD.
 if [ ! -f "$DEBUG_KEYSTORE" ]; then
-  log "generating throwaway debug keystore"
+  # Fallback only; the keystore should already be committed in the repo.
+  log "committed debug keystore missing; generating a temporary one"
+  DEBUG_KEYSTORE="${ANDROID_HOME}/oeffi-ng-debug.jks"
   ${SUDO} keytool -genkeypair -keystore "$DEBUG_KEYSTORE" -storetype JKS -alias apk \
     -storepass "$DEBUG_KEYSTORE_PASSWORD" -keypass "$DEBUG_KEYSTORE_PASSWORD" \
     -keyalg RSA -keysize 2048 -validity 10000 \

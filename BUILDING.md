@@ -81,7 +81,9 @@ this branch (and via **Run workflow**) and publishes it two ways:
   download URL — installable from a phone browser and trackable by Obtainium:
   `https://github.com/xerootg/oeffi-ng/releases/download/debug-latest/oeffi-ng-debug.apk`
 
-It needs no secrets: it applies the patches above and signs with an ephemeral key.
+It needs no secrets: it applies the patches above and signs with the committed
+stable debug key (`.claude/oeffi-ng-debug.jks`, password `oeffi-ng-debug`), so
+each build installs over the previous one without uninstalling.
 Enable **Actions** on the fork (Actions tab) for it to run.
 
 ## Official release build

@@ -64,17 +64,13 @@ jobs:
             "platforms;android-36" "platforms;android-37.0" \
             "build-tools;36.1.0" "build-tools;37.0.0"
 
-      - name: Generate throwaway debug keystore
-        run: |
-          keytool -genkeypair -keystore "${RUNNER_TEMP}/oeffi-debug.jks" -storetype JKS -alias apk \
-            -storepass ci-debug -keypass ci-debug -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Oeffi NG CI Debug, O=oeffi-ng, C=DE" -noprompt
-
       - name: Build debug APK
         working-directory: androidstudio
         env:
-          OEFFI_NG_JKS_PASSWORD: ci-debug
-          OEFFI_NG_DEBUG_KEYSTORE: ${{ runner.temp }}/oeffi-debug.jks
+          # Sign with the committed, stable debug key (.claude/oeffi-ng-debug.jks) so each
+          # build installs over the previous one and Obtainium can auto-update.
+          OEFFI_NG_JKS_PASSWORD: oeffi-ng-debug
+          OEFFI_NG_DEBUG_KEYSTORE: ${{ github.workspace }}/.claude/oeffi-ng-debug.jks
         run: |
           # gradlew is committed non-executable upstream; invoke via sh (exec-bit independent).
           sh ./gradlew --no-daemon :oeffi-studio:assembleNgDebug \
@@ -103,4 +99,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "Debug build (latest)" \
-            --notes "Automated debug build of \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`. Debug-signed with an ephemeral key — sideload to test. Includes the MOTIS ghost-bus and free-text-address fixes."
+            --notes "Automated debug build of \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`. Debug-signed with the committed stable debug key (installs over previous builds) — sideload to test. Includes the MOTIS ghost-bus and free-text-address fixes."
